@@ -1,5 +1,10 @@
 Revision history for Perl module OAuth::Consumer
 
+0.02 2013-02-21
+
+ - Remove the requirement of a Perl with threads
+ - Add the 'thread' mode for getting a verifier
+
 0.01 2013-02-18
 
  - Initial release

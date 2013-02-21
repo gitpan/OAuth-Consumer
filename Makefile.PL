@@ -13,7 +13,7 @@ WriteMakefile(
 				'ExtUtils::MakeMaker' => 6.3002,
 			},
 		BUILD_REQUIRES => {
-				'Test::Subs' => 0,
+				'Test::Subs' => 0.07,
 				'LWP::UserAgent' => 0,
 				'WWW::Mechanize' => 0
 			},
@@ -25,8 +25,6 @@ WriteMakefile(
 				'HTTP::Response' => 0,
 				'Encode' => 0,
 				'HTML::Entities' => 0,
-				'threads' => 0,
-				'Thread::Queue' => 0
     		},
 	);
 

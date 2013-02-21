@@ -1,8 +1,7 @@
 package OAuth::Consumer;
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 use strict;
 use warnings;
-use threads;
 use feature 'switch';
 use Carp;
 use IO::Socket::INET;
@@ -10,7 +9,6 @@ use URI::Escape;
 use HTTP::Response;
 use Encode;
 use HTML::Entities;
-use Thread::Queue;
 use parent 'LWP::Authen::OAuth';
 
 =encoding utf-8
@@ -80,6 +78,8 @@ these websites:
 =item L<http://hueniverse.com/oauth/guide/authentication/>
 
 =item L<http://code.google.com/p/oauthconsumer/wiki/UsingOAuthConsumer>
+
+=item L<http://tools.ietf.org/html/rfc5849>
 
 =back
 
@@ -161,7 +161,7 @@ C<manual> (see just below).
 =item * C<oauth_verifier_type>
 
 This parameter allows to specify how the verifier code is received by your
-application. Currently the library support only two mode. The default is
+application. Currently the library support three modes. The default is
 C<'blocking'>. In this mode, a call to C<get_access_token> will be blocking until
 the user complete its authentication process at the url given as the result of
 the C<get_request_token> call. During this time, the library will have set up a
@@ -178,6 +178,19 @@ C<get_request_token> method).
 
 The C<manual> mode is the default if you supply an C<oauth_callback> argument to
 the constructor.
+
+Finally there is the C<thread> mode. This mode is similar in functionnalities to
+the C<blocking> mode except that the small web server (which get the result of
+the authentication) is run in a separate thread. This enable you more flexibilities
+as you can complete the authentication process (be it by your user or with a
+programatic method) before calling the C<get_access_token>. Obviously, you will
+need a Perl with threads enabled to use this mode.
+
+You should also note that in C<thread> mode the library itself is not thread-safe!
+It plays with the C<ALARM> handler and as such it should be called from the main
+thread of the program. Also, there may not be multiple concurently running
+OAuth::Consumer object (that is in-between the C<get_request_token> and
+C<get_access_token> call) if you are in C<thread> mode.
 
 =item * C<oauth_verifier_valid_msg> and C<oauth_verifier_invalid_msg>
 
@@ -253,7 +266,13 @@ provider's website. If this process takes more time than the value of the
 C<oauth_verifier_timeout> parameter (in the constructor) then the method will
 croak with the following message: C<'Timeout error while waiting for a callback connection'>.
 You can trap this error (with C<eval>) and, optionnaly, restart the call to
-C<get_access_token> (which will wait for the same duration).
+C<get_access_token> (which will wait for the same duration) if the C<oauth_verifier_type>
+is C<blocking> (you may not call this function more than once per call to
+C<get_request_token> in C<thread> mode).
+
+If the C<oauth_verifier_type> parameter is C<'blocking'> you must call this
+function as soon as you have instructed your user to authenticate at the
+I<verifier> URL.
 
 If the C<oauth_verifier_type> parameter is C<'manual'> then this function will
 not block. But then you I<must> specify an C<oauth_verifier> named argument to
@@ -269,6 +288,9 @@ an empty value to the C<oauth_verifier> argument of this method.
 All other arguments in the C<%args> hash will be passed with the I<access token>
 query. To the author knowledge, no service providers require any arguments with
 this query (as opposed to the I<request token> query).
+
+Finally, this function plays with the C<alarm> function and associated handler.
+So you should not rely on alarm handler set accross this function call.
 
 =cut
 
@@ -297,6 +319,20 @@ sub new {
 	$opts{oauth_verifier_valid_msg} ||= 'Authentication accepted you can go back to the application';
 	$opts{oauth_verifier_invalid_msg} ||= 'There have been a problem with your authentication';
 	$opts{oauth_verifier_timeout} //= 180; # /
+	
+	given($opts{oauth_verifier_type}) {
+		when(/^(manual|blocking)$/) { }
+		when('thread') {
+			if (not eval 'use threads; 1') {
+				croak "You need a thread enabled Perl to a use oauth_verifier_type of 'thread'";
+			} elsif (not eval 'use Thread::Queue; 1') {
+				croak "You need 'Thread::Queue' to use a oauth_verifier_type of 'thread'";
+			}
+		}
+		default {
+			croak "Unknown value for the oauth_verifier_type parameter: ".$opts{oauth_verifier_type};
+		}
+	}
 
 	my $self = $class->SUPER::new(%args);
 
@@ -330,7 +366,6 @@ sub m__start_server {
 	return $self->{oauth_callback};
 }
 
-
 sub __forge_response {
 	my ($ok, $txt) = @_;
 	
@@ -352,6 +387,75 @@ sub __forge_response {
 	return $m->as_string();
 }
 
+sub m__get_verifier {
+	my ($self) = @_;
+
+	my $sock = $self->{oauth_consumer_server_sock}->accept();
+	return 'OAUTH::CONSUMER::ERR:Timeout error while waiting for a callback connection' unless $sock;
+	$self->{oauth_consumer_server_sock}->close();
+
+	my $get_line;
+	eval {
+		local $SIG{ALRM} = sub { die "Timeout error while reading the callback data\n" };
+		alarm 5;
+		$get_line = $sock->getline();
+		alarm 0;
+	};
+	return "OAUTH::CONSUMER::ERR:$@" if $@;
+
+	if ($get_line =~ m{^GET\s+/oauth_callback.*oauth_verifier=([-0-9a-z]+)}i) {
+		$self->{oauth_verifier} = $1;
+		$sock->print(__forge_response(1, $self->{oauth_verifier_valid_msg}));
+		$sock->close();
+		return $self->{oauth_verifier};
+	} else {
+		$sock->print(__forge_response(0, $self->{oauth_verifier_invalid_msg}));	
+		$sock->close();
+		return "OAUTH::CONSUMER::ERR:no match in GET line '$get_line'";
+	}
+}
+
+sub m__get_thread_verifier {
+	my ($self) = @_;
+
+	$self->{thread}->join();
+	delete $self->{thread};
+	$SIG{ALRM} = $self->{previous_alrm_handler};
+	# On n'utilise pas la valeur de retour du thread pour faire quelquechose de
+	# plus facilement extensible.
+	return $self->{thread_queue}->dequeue();
+}
+
+sub DESTROY {
+	my ($self) = @_;
+
+	if ($self->{thread}) {
+		if ($self->{thread}->is_joinable()) {
+			$self->{thread}->join();
+		} else {
+			$self->{thread}->detach();		
+		}
+	}
+}
+
+sub m__start_thread_server {
+	my ($self) = @_;
+
+	$self->{thread_queue} = Thread::Queue->new();
+
+	$self->{thread} = threads->create(sub {
+			$self->{thread_queue}->enqueue($self->m__start_server());
+			$self->{thread_queue}->enqueue($self->m__get_verifier());
+		});
+
+	$self->{previous_alrm_handler} = $SIG{ALRM};
+	$SIG{ALRM} = sub {
+			$self->{thread}->is_running();
+			$self->{thread}->kill('ALRM');
+		};
+
+	return $self->{thread_queue}->dequeue();	
+}
 
 sub get_request_token {
 	my ($self, %args) = @_;
@@ -367,7 +471,8 @@ sub get_request_token {
 			croak "Cannot open the verifier callback: $!" unless $self->{oauth_callback};
 		}
 		when('thread') {
-		
+			$self->{oauth_callback} = $self->m__start_thread_server();
+			croak "Cannot open the verifier callback: $!" unless $self->{oauth_callback};			
 		}
 		when('manual') {
 			if (not $self->{oauth_callback}) {
@@ -405,26 +510,10 @@ sub get_access_token {
 
 	given($self->{oauth_verifier_type}) {
 		when('blocking') {
-			my $sock = $self->{oauth_consumer_server_sock}->accept();
-			croak 'Timeout error while waiting for a callback connection' unless $sock;
-			$self->{oauth_consumer_server_sock}->close();
-		
-			local $SIG{ALRM} = sub { croak 'Timeout error while reading the callback data' };
-			alarm 5;
-			my $get_line = $sock->getline();
-			alarm 0;
-		
-			if ($get_line =~ m{^GET\s+/oauth_callback.*oauth_verifier=([-0-9a-z]+)}i) {
-				$self->{oauth_verifier} = $1;
-				$sock->print(__forge_response(1, $self->{oauth_verifier_valid_msg}));
-				$sock->close();
-			} else {
-				$sock->print(__forge_response(0, $self->{oauth_verifier_invalid_msg}));	
-				$sock->close();
-				croak "no match in GET line '$get_line'";
-			}
+			$self->{oauth_verifier} = $self->m__get_verifier();
 		}
 		when('thread') {
+			$self->{oauth_verifier} = $self->m__get_thread_verifier();
 		}
 		when('manual') {
 			croak 'You must supply a oauth_verifier' unless exists $args{oauth_verifier};
@@ -433,7 +522,10 @@ sub get_access_token {
 		default {
 			croak "Unknown value for the oauth_verifier_type parameter: ".$self->{oauth_verifier_type};
 		}
-	} 
+	}
+	if ($self->{oauth_verifier} =~ m/^OAUTH::CONSUMER::ERR:(.*?)$/m) {
+		croak $1;
+	}
 
 	my $verif_header = 'OAuth oauth_verifier="'.uri_escape($self->{oauth_verifier}).'"';
 	my $r = $self->post($self->{oauth_access_token_url}, Authorization => $verif_header, %args);
@@ -477,12 +569,15 @@ API documentation of your service provider to know what it expects.
   );
   
   my $verifier_url = $ua->get_request_token(
-  	scope => 'http://oauth-provider.example.com/scope1',
+  	scope              => 'http://oauth-provider.example.com/scope1',
   	xoauth_displayname => 'My Application Name'
   );
   
   # Send your user to $verifier_url to authenticate or use a WWW::Mechanize
-  # robot to performs the authentication programatically.
+  # robot to performs the authentication programatically. In this later case,
+  # you should use the "oauth_verifier_type => thread" argument in the call to
+  # new to ensure that the authentication can terminate before the call to
+  # get_access_token.
   
   my ($token, $secret) = $ua->get_access_token();
   
@@ -539,8 +634,8 @@ procedure.
   my $ua = OAuth::Consumer->new(
   	oauth_consumer_key      => 'my-consumer-key',
   	oauth_consumer_secret   => 'my-consumer-secret',
-  	oauth_token => $token,
-  	oauth_token_secret => $secret
+  	oauth_token             => $token,
+  	oauth_token_secret      => $secret
   );
   
   $r = $ua->get('http://oauth-provider.example.com/protected_ressource');
@@ -599,7 +694,7 @@ Mathias Kende (mathias@cpan.org)
 
 =head1 VERSION
 
-Version 0.01 (February 2013)
+Version 0.02 (February 2013)
 
 =head1 COPYRIGHT & LICENSE
 

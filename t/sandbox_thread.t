@@ -1,29 +1,17 @@
 use strict;
 use warnings;
-use Test::Subs;
+use Test::Subs debug => 1;
 use OAuth::Consumer;
 use WWW::Mechanize;
 
-__END__
+skip 'You need a Perl with thread' unless eval 'use threads; 1' && eval 'use Thread::Queue; 1';
 
 my ($ua, $oua, $r, $api, $verifier_url);
 my ($token, $secret);
 
-test {
-	$oua = OAuth::Consumer->new(
-		oauth_request_token_url => 'http://oauth-sandbox.sevengoslings.net/request_token',
-		oauth_access_token_url => 'http://oauth-sandbox.sevengoslings.net/access_token',
-		oauth_authorize_url => 'http://oauth-sandbox.sevengoslings.net/authorize',
-	);
-};
-
-test {
-	$r = $oua->get('http://oauth-sandbox.sevengoslings.net/two_legged');
-};
-
-test {
-	$r->code == 500;
-};
+$ua = LWP::UserAgent->new(timeout => 15);
+$r = $ua->get('http://oauth-sandbox.sevengoslings.net/');
+skip 'oauth-sandbox.sevengoslings.net is not reachable' unless $r->is_success;
 
 test {
 	$oua = OAuth::Consumer->new(
@@ -32,22 +20,17 @@ test {
 		oauth_request_token_url => 'http://oauth-sandbox.sevengoslings.net/request_token',
 		oauth_access_token_url => 'http://oauth-sandbox.sevengoslings.net/access_token',
 		oauth_authorize_url => 'http://oauth-sandbox.sevengoslings.net/authorize',
+		oauth_verifier_type => 'thread'
 	);
 };
 
 test {
 	$r = $oua->get('http://oauth-sandbox.sevengoslings.net/three_legged');
-};
-
-test {
 	$r->code == 500;
 };
 
 test {
 	$r = $oua->get('http://oauth-sandbox.sevengoslings.net/two_legged');
-};
-
-test {
 	$r->is_success;
 };
 
@@ -58,22 +41,18 @@ test {
 #comment { $verifier_url };
 
 test {
-	my $thr = threads->create( sub {
-		my $mech = WWW::Mechanize->new();
-		$mech->get($verifier_url);
-		$mech->submit_form(
-				with_fields      => {
-						username => 'mathias',
-						kitten => 'able',
-					}
-			);
-			# bug dans WWW::Mechanize qui ne poste pas les valeurs du champs submit...
-			$mech->submit_form(with_fields => { allow => 'Allow Access' });
-			$mech->form_with_fields('allow');
-			$mech->click_button(value => 'Allow Access');
-		});
-	$thr->detach();
-	1;
+	my $mech = WWW::Mechanize->new();
+	$mech->get($verifier_url);
+	$mech->submit_form(
+			with_fields      => {
+					username => 'mathias',
+					kitten => 'able',
+				}
+		);
+	# bug dans WWW::Mechanize qui ne poste pas les valeurs du champs submit...
+	$mech->submit_form(with_fields => { allow => 'Allow Access' });
+	$mech->form_with_fields('allow');
+	$mech->click_button(value => 'Allow Access');
 };
 
 
@@ -85,9 +64,6 @@ test {
 
 test {
 	$r = $oua->get('http://oauth-sandbox.sevengoslings.net/three_legged');
-};
-
-test {
 	$r->is_success;
 };
 
@@ -102,17 +78,11 @@ test {
 
 test {
 	$r = $oua->get('http://oauth-sandbox.sevengoslings.net/three_legged');
-};
-
-test {
 	$r->is_success;
 };
 
 test {
 	$r = $oua->get('http://oauth-sandbox.sevengoslings.net/two_legged');
-};
-
-test {
 	$r->is_success;
 };
 

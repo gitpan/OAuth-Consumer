@@ -1,11 +1,16 @@
 use strict;
 use warnings;
-use Test::Subs debug => 1;
+use Test::Subs;
 use OAuth::Consumer;
 use LWP::UserAgent;
-use threads;
 
 my ($ua, $r, $url);
+
+skip 'You need a Perl with thread' unless eval 'use threads; 1' && eval 'use Thread::Queue; 1';
+$ua = LWP::UserAgent->new(timeout => 15);
+$r = $ua->get('http://notesync.org:8080/');
+skip 'notesync.org is not reachable' unless $r->is_success;
+
 
 test {
 	$ua = OAuth::Consumer->new(

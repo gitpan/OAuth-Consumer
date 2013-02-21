@@ -1,11 +1,18 @@
 use strict;
 use warnings;
-use Test::Subs;
+use Test::Subs debug => 1;
 use OAuth::Consumer;
 use WWW::Mechanize;
 
+skip 'You need a Perl with thread' unless eval 'use threads; 1' && eval 'use Thread::Queue; 1';
+
 my ($ua, $oua, $r, $api, $verifier_url);
 my ($token, $secret);
+
+$ua = LWP::UserAgent->new(timeout => 15);
+$r = $ua->get('http://oauth-sandbox.sevengoslings.net/');
+skip 'oauth-sandbox.sevengoslings.net is not reachable' unless $r->is_success;
+
 
 test {
 	$oua = OAuth::Consumer->new(

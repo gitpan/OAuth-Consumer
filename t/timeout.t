@@ -6,6 +6,10 @@ use OAuth::Consumer;
 # we use this server for the test: http://term.ie/oauth/example/
 my ($ua, $r);
 
+$ua = LWP::UserAgent->new(timeout => 15);
+$r = $ua->get('http://term.ie/oauth/example/');
+skip 'term.ie/oauth/example/ is not reachable' unless $r->is_success;
+
 test {
 	$ua = OAuth::Consumer->new(
 			oauth_consumer_key => 'key',

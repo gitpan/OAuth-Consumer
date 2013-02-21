@@ -59,6 +59,7 @@ DESCRIPTION
     TH.md>
     <http://hueniverse.com/oauth/guide/authentication/>
     <http://code.google.com/p/oauthconsumer/wiki/UsingOAuthConsumer>
+    <http://tools.ietf.org/html/rfc5849>
 
 CONSTRUCTOR
       my $ua = OAuth::Consumer->new(%args);
@@ -140,13 +141,13 @@ CONSTRUCTOR
     *   "oauth_verifier_type"
 
         This parameter allows to specify how the verifier code is received
-        by your application. Currently the library support only two mode.
-        The default is 'blocking'. In this mode, a call to
-        "get_access_token" will be blocking until the user complete its
-        authentication process at the url given as the result of the
-        "get_request_token" call. During this time, the library will have
-        set up a small web server which will wait to be triggered by the
-        user browser at the end of this authentication.
+        by your application. Currently the library support three modes. The
+        default is 'blocking'. In this mode, a call to "get_access_token"
+        will be blocking until the user complete its authentication process
+        at the url given as the result of the "get_request_token" call.
+        During this time, the library will have set up a small web server
+        which will wait to be triggered by the user browser at the end of
+        this authentication.
 
         If this setting is not working for you, you may use an
         "oauth_verifier_type" of 'manual'. In this case, no web server is
@@ -159,6 +160,22 @@ CONSTRUCTOR
 
         The "manual" mode is the default if you supply an "oauth_callback"
         argument to the constructor.
+
+        Finally there is the "thread" mode. This mode is similar in
+        functionnalities to the "blocking" mode except that the small web
+        server (which get the result of the authentication) is run in a
+        separate thread. This enable you more flexibilities as you can
+        complete the authentication process (be it by your user or with a
+        programatic method) before calling the "get_access_token".
+        Obviously, you will need a Perl with threads enabled to use this
+        mode.
+
+        You should also note that in "thread" mode the library itself is not
+        thread-safe! It plays with the "ALARM" handler and as such it should
+        be called from the main thread of the program. Also, there may not
+        be multiple concurently running OAuth::Consumer object (that is
+        in-between the "get_request_token" and "get_access_token" call) if
+        you are in "thread" mode.
 
     *   "oauth_verifier_valid_msg" and "oauth_verifier_invalid_msg"
 
@@ -235,7 +252,13 @@ METHODS
     then the method will croak with the following message: 'Timeout error
     while waiting for a callback connection'. You can trap this error (with
     "eval") and, optionnaly, restart the call to "get_access_token" (which
-    will wait for the same duration).
+    will wait for the same duration) if the "oauth_verifier_type" is
+    "blocking" (you may not call this function more than once per call to
+    "get_request_token" in "thread" mode).
+
+    If the "oauth_verifier_type" parameter is 'blocking' you must call this
+    function as soon as you have instructed your user to authenticate at the
+    *verifier* URL.
 
     If the "oauth_verifier_type" parameter is 'manual' then this function
     will not block. But then you *must* specify an "oauth_verifier" named
@@ -252,6 +275,10 @@ METHODS
     All other arguments in the %args hash will be passed with the *access
     token* query. To the author knowledge, no service providers require any
     arguments with this query (as opposed to the *request token* query).
+
+    Finally, this function plays with the "alarm" function and associated
+    handler. So you should not rely on alarm handler set accross this
+    function call.
 
 EXAMPLES
   Getting an access token and secret
@@ -276,12 +303,15 @@ EXAMPLES
       );
   
       my $verifier_url = $ua->get_request_token(
-            scope => 'http://oauth-provider.example.com/scope1',
+            scope              => 'http://oauth-provider.example.com/scope1',
             xoauth_displayname => 'My Application Name'
       );
   
       # Send your user to $verifier_url to authenticate or use a WWW::Mechanize
-      # robot to performs the authentication programatically.
+      # robot to performs the authentication programatically. In this later case,
+      # you should use the "oauth_verifier_type => thread" argument in the call to
+      # new to ensure that the authentication can terminate before the call to
+      # get_access_token.
   
       my ($token, $secret) = $ua->get_access_token();
   
@@ -339,8 +369,8 @@ EXAMPLES
       my $ua = OAuth::Consumer->new(
             oauth_consumer_key      => 'my-consumer-key',
             oauth_consumer_secret   => 'my-consumer-secret',
-            oauth_token => $token,
-            oauth_token_secret => $secret
+            oauth_token             => $token,
+            oauth_token_secret      => $secret
       );
   
       $r = $ua->get('http://oauth-provider.example.com/protected_ressource');
@@ -391,7 +421,7 @@ AUTHOR
     Mathias Kende (mathias@cpan.org)
 
 VERSION
-    Version 0.01 (February 2013)
+    Version 0.02 (February 2013)
 
 COPYRIGHT & LICENSE
     Copyright 2013 © Mathias Kende. All rights reserved.
