@@ -221,7 +221,10 @@ METHODS
     required by your service provider. Example of such argument are
     "xoauth_displayname", "scope", or "realm". You should look at the
     documentation of your service provider to know which arguments it
-    expects.
+    expects. These arguments will be added as POST arguments in the OAuth
+    query. If you need to pass them as GET arguments (in the url of the
+    query), then you should modify yourself the "oauth_request_token_url"
+    that you give to the constructor of the class.
 
     On success, this method returns a string containing an URL to which the
     application user should be directed to authorise your application to
@@ -421,7 +424,7 @@ AUTHOR
     Mathias Kende (mathias@cpan.org)
 
 VERSION
-    Version 0.02 (February 2013)
+    Version 0.03 (March 2013)
 
 COPYRIGHT & LICENSE
     Copyright 2013 © Mathias Kende. All rights reserved.

@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               OAuth-Consumer
-version:            0.02
+version:            0.03
 abstract:           LWP based user agent with OAuth for consumer application
 author:
     - Mathias Kende <mathias@cpan.org>

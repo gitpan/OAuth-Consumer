@@ -1,5 +1,5 @@
 package OAuth::Consumer;
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 use strict;
 use warnings;
 use feature 'switch';
@@ -237,7 +237,10 @@ This call initiates a new authorisation procedure. It does not expect any
 arguments but you can provide any additionnal OAuth argument required by your
 service provider. Example of such argument are C<xoauth_displayname>, C<scope>,
 or C<realm>. You should look at the documentation of your service provider to
-know which arguments it expects.
+know which arguments it expects. These arguments will be added as POST arguments
+in the OAuth query. If you need to pass them as GET arguments (in the url of the
+query), then you should modify yourself the C<oauth_request_token_url> that you
+give to the constructor of the class.
 
 On success, this method returns a string containing an URL to which the
 application user should be directed to authorise your application to access to
@@ -300,7 +303,7 @@ my @internal_opts = qw(
 	oauth_version oauth_callback oauth_verifier_type oauth_verifier_valid_msg
 	oauth_verifier_invalid_msg oauth_verifier_timeout);
 
-
+my $max_content_len_for_error = 60;
 
 sub new {
 	my ($class, %args) = @_;
@@ -403,7 +406,7 @@ sub m__get_verifier {
 	};
 	return "OAUTH::CONSUMER::ERR:$@" if $@;
 
-	if ($get_line =~ m{^GET\s+/oauth_callback.*oauth_verifier=([-0-9a-z]+)}i) {
+	if ($get_line =~ m{^GET\s+/oauth_callback.*oauth_verifier=([-0-9a-z_]+)}i) {
 		$self->{oauth_verifier} = $1;
 		$sock->print(__forge_response(1, $self->{oauth_verifier_valid_msg}));
 		$sock->close();
@@ -489,7 +492,12 @@ sub get_request_token {
 
 	# request a 'request' token
 	my $r = $self->post($self->{oauth_request_token_url}, Authorization => "OAuth oauth_callback=\"$cback\"", %args);
-	croak "error during the GetRequestToken call: ".$r->message if $r->is_error;
+	if ($r->is_error) {
+		my $str = length $r->content > $max_content_len_for_error ?
+				substr($r->content, 0, $max_content_len_for_error - 3).'...'
+				: $r->content;
+		croak "error during the GetRequestToken call: ".$r->message." ($str)";
+	}
 
 	$self->oauth_update_from_response($r);
 	my $token = $self->oauth_token();
@@ -529,6 +537,12 @@ sub get_access_token {
 
 	my $verif_header = 'OAuth oauth_verifier="'.uri_escape($self->{oauth_verifier}).'"';
 	my $r = $self->post($self->{oauth_access_token_url}, Authorization => $verif_header, %args);
+	if ($r->is_error) {
+		my $str = length $r->content > $max_content_len_for_error ?
+				substr($r->content, 0, $max_content_len_for_error - 3).'...'
+				: $r->content;
+		croak "error during the GetAccessToken call: ".$r->message." ($str)";
+	}
 	$self->oauth_update_from_response($r);
 	
 	my $token = $self->oauth_token();
@@ -683,6 +697,11 @@ need another signature mode.
 Please report any bugs or feature requests to C<bug-oauth-consumer@rt.cpan.org>, or
 through the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=OAuth-Consumer>.
 
+However note that the tests for this distribution all depend on external service
+which may be unavailable or broken at some point. I have removed from the
+distribution the test depending on unreliable provider but some errors may still
+happen.
+
 =head1 SEE ALSO
 
 LWP::Authen::OAuth, LWP::UserAgent, OAuth::Simple, Net::OAuth, OAuth::Lite,
@@ -694,7 +713,7 @@ Mathias Kende (mathias@cpan.org)
 
 =head1 VERSION
 
-Version 0.02 (February 2013)
+Version 0.03 (March 2013)
 
 =head1 COPYRIGHT & LICENSE
 
